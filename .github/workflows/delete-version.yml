@@ -1,5 +1,5 @@
 name: Delete version
-run-name: Delete ${{ inputs.version }}
+run-name: Delete ${{ inputs.version || github.event.inputs.version }}
 
 # Manually remove a published version from BOTH the GitHub Release (and its tag) and
 # the `updates` branch used by the in-DLL self-updater. If the removed version is the

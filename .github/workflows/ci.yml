@@ -1,5 +1,12 @@
 name: CI
 
+run-name: ${{ github.event_name == 'push' && 'Release' || 'CI' }} build (${{ github.ref_name }})
+
+# On every push to main this workflow is also the RELEASE workflow:
+#   build Release + Debug -> GitHub Release (zip) + tag v<version> -> branch `updates`
+# The `updates` branch is what the in-DLL self-updater reads (latest.toml + the
+# per-version DLL), so a push to main is what ships to users.
+# Pull requests only build and upload artifacts.
 on:
   pull_request:
     branches: [main]
@@ -10,6 +17,9 @@ on:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -22,11 +32,28 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The app version is the number the in-DLL self-updater compares against:
+      # it is baked into the DLL as OPENSTEAMTOOL_VERSION and is the single source
+      # of truth for the tag, the Release and opensteamtool/latest.toml.
+      - name: Read version
+        id: ver
+        shell: pwsh
+        run: |
+          $line = Select-String -Path "src\CMakeLists.txt" -Pattern '^project\(OpenSteamTool VERSION ([0-9]+\.[0-9]+\.[0-9]+)' |
+                  Select-Object -First 1
+          if (-not $line) { Write-Error "Could not parse project(OpenSteamTool VERSION x.y.z) in src/CMakeLists.txt"; exit 1 }
+          $version = $line.Matches[0].Groups[1].Value
+          "number=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version"  >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $version"
 
       - uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure
-        run: cmake -S src -B build -G "Ninja Multi-Config"
+        run: cmake -S src -B build -G "Ninja Multi-Config" -DOPENSTEAMTOOL_VERSION="${{ steps.ver.outputs.tag }}"
 
       - name: Build ${{ matrix.config }}
         run: cmake --build build --config ${{ matrix.config }}
@@ -38,3 +65,127 @@ jobs:
           name: OpenSteamTool-${{ matrix.config }}-pr${{ github.event.pull_request.number || github.run_number }}
           path: build/${{ matrix.config }}/
           retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Release: only for pushes to main, and only after BOTH configs built.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish release
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: ver
+        shell: pwsh
+        run: |
+          $line = Select-String -Path "src\CMakeLists.txt" -Pattern '^project\(OpenSteamTool VERSION ([0-9]+\.[0-9]+\.[0-9]+)' |
+                  Select-Object -First 1
+          if (-not $line) { Write-Error "Could not parse project(OpenSteamTool VERSION x.y.z) in src/CMakeLists.txt"; exit 1 }
+          $version = $line.Matches[0].Groups[1].Value
+          "number=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version"  >> $env:GITHUB_OUTPUT
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: OpenSteamTool-Release-pr${{ github.run_number }}
+          path: artifacts/Release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: OpenSteamTool-Debug-pr${{ github.run_number }}
+          path: artifacts/Debug
+
+      # The deliverable is the three hijack DLLs that go into the Steam root, not
+      # the .lib/.exp/.pdb build products.
+      - name: Package Release
+        run: |
+          7z a "OpenSteamTool-${{ steps.ver.outputs.tag }}-Release.zip" `
+            ".\artifacts\Release\dwmapi.dll" `
+            ".\artifacts\Release\xinput1_4.dll" `
+            ".\artifacts\Release\OpenSteamTool.dll" -mx5
+
+      - name: Package Debug
+        run: |
+          7z a "OpenSteamTool-${{ steps.ver.outputs.tag }}-Debug.zip" `
+            ".\artifacts\Debug\dwmapi.dll" `
+            ".\artifacts\Debug\xinput1_4.dll" `
+            ".\artifacts\Debug\OpenSteamTool.dll" -mx5
+
+      # Publish the DLL + pointer to the orphan `updates` branch FIRST: this is what
+      # the self-updater actually fetches. Layout:
+      #   opensteamtool/latest.toml                          -> version/path/sha256
+      #   opensteamtool/<version>/OpenSteamTool.dll          -> payload
+      #   opensteamtool/<version>/OpenSteamTool.dll.sha256   -> hash
+      # The version directory is immutable; only latest.toml moves.
+      - name: Publish update to updates branch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver  = "${{ steps.ver.outputs.tag }}"
+          $repo = "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          $hash = (Get-FileHash ".\artifacts\Release\OpenSteamTool.dll" -Algorithm SHA256).Hash.ToLower()
+
+          git clone --branch updates --single-branch $repo pub
+          if (-not (Test-Path pub/.git)) {   # first run: create the orphan branch
+            Remove-Item -Recurse -Force pub -ErrorAction SilentlyContinue
+            git clone $repo pub
+            Push-Location pub
+            git checkout --orphan updates
+            git rm -rf . 2>$null
+            Pop-Location
+          }
+
+          $dir = "pub/opensteamtool/$ver"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item ".\artifacts\Release\OpenSteamTool.dll" "$dir/OpenSteamTool.dll" -Force
+          [IO.File]::WriteAllText((Resolve-Path $dir).Path + "/OpenSteamTool.dll.sha256", $hash)
+          $lines = @(
+            "version = `"$ver`""
+            "path    = `"opensteamtool/$ver/OpenSteamTool.dll`""
+            "sha256  = `"$hash`""
+          )
+          Set-Content -Path "pub/opensteamtool/latest.toml" -Value $lines -Encoding ascii
+
+          Push-Location pub
+          git add -A
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -m "opensteamtool $ver"
+          git push origin updates
+          Pop-Location
+
+      - name: Purge jsDelivr cache for pointer
+        shell: pwsh
+        run: |
+          try {
+            Invoke-WebRequest -UseBasicParsing `
+              "https://purge.jsdelivr.net/gh/${{ github.repository }}@updates/opensteamtool/latest.toml" | Out-Null
+          } catch { Write-Host "jsDelivr purge failed (non-fatal): $_" }
+
+      # GitHub Release is the human-facing download page. Tag is created here so the
+      # Release and the `updates` payload always carry the same version.
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          body: |
+            ## Changes
+
+            ${{ github.event.head_commit.message }}
+
+            ## Installation
+
+            Download `OpenSteamTool-${{ steps.ver.outputs.tag }}-Release.zip` (or the `-Debug` variant if you need logging to `<steam>/opensteamtool directory`).
+
+            Extract and copy `dwmapi.dll`, `xinput1_4.dll` and `OpenSteamTool.dll` to your Steam root directory (e.g. `C:\Program Files (x86)\Steam`).
+
+            Create a Lua config directory (for example `C:\Program Files (x86)\Steam\config\stplug-in`) and place your Lua scripts there.
+          files: |
+            OpenSteamTool-${{ steps.ver.outputs.tag }}-Release.zip
+            OpenSteamTool-${{ steps.ver.outputs.tag }}-Debug.zip
