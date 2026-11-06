@@ -1,0 +1,71 @@
+#!/bin/sh
+# ---------------------------------------------------------------------------
+# Pre-commit hook: bump the patch version on every commit.
+#
+#   2.0.0 -> 2.0.1 -> 2.0.2 ...
+#
+# The version lives in `project(OpenSteamTool VERSION x.y.z ...)` in
+# src/CMakeLists.txt, so the number embedded into OpenSteamTool.dll (read by the
+# self-updater) always moves forward with each commit.
+#
+# The bumped file is staged automatically, so it lands in this same commit.
+# Installed by install-hooks.bat; also usable standalone:
+#   sh .githooks/pre-commit
+#
+# NOTE: `pre-commit` never receives the commit message, so messages cannot opt
+# out here. Use `git commit --no-verify` to commit without a version bump.
+# ---------------------------------------------------------------------------
+
+set -e
+
+ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+CMAKE_FILE="$ROOT/src/CMakeLists.txt"
+[ -f "$CMAKE_FILE" ] || exit 0
+
+# --- current version in the working copy -----------------------------------
+read_version() {
+    sed -n 's/^project(OpenSteamTool VERSION \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "$1" | head -n 1
+}
+VERSION="$(read_version "$CMAKE_FILE")"
+[ -n "$VERSION" ] || exit 0
+
+# If src/CMakeLists.txt is already modified in the worktree, the user edited it
+# on purpose - trust that value instead of stacking another bump on top.
+if ! git -C "$ROOT" diff --quiet -- src/CMakeLists.txt ||
+   git -C "$ROOT" ls-files --error-unmatch src/CMakeLists.txt >/dev/null 2>&1 &&
+   ! git -C "$ROOT" diff --cached --quiet -- src/CMakeLists.txt; then
+    echo "pre-commit: src/CMakeLists.txt already modified ($VERSION); leaving it as is."
+    git -C "$ROOT" add -- src/CMakeLists.txt
+    exit 0
+fi
+
+# Never go below what HEAD already carries, even if the worktree drifted.
+HEAD_VERSION="$(git -C "$ROOT" show HEAD:src/CMakeLists.txt 2>/dev/null | sed -n 's/^project(OpenSteamTool VERSION \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n 1 || true)"
+if [ -n "$HEAD_VERSION" ]; then
+    newer="$(printf '%s\n%s\n' "$HEAD_VERSION" "$VERSION" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)"
+    VERSION="$newer"
+fi
+
+MAJOR="$(echo "$VERSION" | cut -d. -f1)"
+MINOR="$(echo "$VERSION" | cut -d. -f2)"
+PATCH="$(echo "$VERSION" | cut -d. -f3)"
+PATCH=$((PATCH + 1))
+NEW="$MAJOR.$MINOR.$PATCH"
+
+# --- rewrite src/CMakeLists.txt (first project() line only) ----------------
+TMP="$CMAKE_FILE.ver.tmp"
+sed "1,/^project(OpenSteamTool VERSION [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/s/^project(OpenSteamTool VERSION [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/project(OpenSteamTool VERSION $NEW/" \
+    "$CMAKE_FILE" > "$TMP"
+
+# Safety: exactly one project() line must remain, and it must carry the new number.
+COUNT="$(grep -c '^project(OpenSteamTool VERSION ' "$TMP")"
+if [ "$COUNT" -ne 1 ] || ! grep -q "^project(OpenSteamTool VERSION $NEW " "$TMP"; then
+    rm -f "$TMP"
+    echo "pre-commit: could not bump version safely; leaving src/CMakeLists.txt untouched." >&2
+    exit 1
+fi
+mv -f "$TMP" "$CMAKE_FILE"
+git -C "$ROOT" add -- src/CMakeLists.txt
+
+echo "pre-commit: version -> $NEW"
+exit 0
