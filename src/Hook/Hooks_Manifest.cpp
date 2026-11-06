@@ -1,5 +1,6 @@
 #include "Hooks_Manifest.h"
 #include "HookMacros.h"
+#include "Hooks_Misc.h"
 #include "dllmain.h"
 #include "OSTPlatform/include/Thread.h"
 #include "Utils/SteamMetadata/ManifestCache.h"
@@ -12,6 +13,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 // ═══════════════════════════════════════════════════════════════════
@@ -50,6 +52,22 @@ namespace {
     struct DepotSeen { AppId_t appId; uint64 gid; };
     std::unordered_map<uint32, DepotSeen> g_depotsSeen;
     std::mutex g_depotsSeenMutex;
+
+    // appId -> every depot id that has ever appeared in its depot configs,
+    // shared entries included. Lets the Family Sharing path wait for manifests
+    // of an app added with addappid() alone (no addappid() per depot).
+    std::unordered_map<AppId_t, std::unordered_set<uint32>> g_appDepots;
+    std::mutex g_appDepotsMutex;
+
+    void RecordAppDepots(AppId_t appId, const CUtlVector<DepotEntry>* vec) {
+        if (!appId || !vec || !vec->m_Size) return;
+        std::lock_guard<std::mutex> lock(g_appDepotsMutex);
+        auto& set = g_appDepots[appId];
+        for (uint32 i = 0; i < vec->m_Size; ++i) {
+            const DepotEntry& e = vec->m_Memory.m_pMemory[i];
+            if (e.DepotId) set.insert(e.DepotId);
+        }
+    }
 
     void RecordDepots(const CUtlVector<DepotEntry>* vec) {
         if (!vec) return;
@@ -161,9 +179,15 @@ namespace {
         // its own list was empty but one shared entry (depot 228989 of app
         // 228980) was present, so the guard missed and Steam stored the empty
         // config, finishing with "0 mounted depots".
+        //
+        // A Family-shared app whose depots Steam could not build yet (the
+        // lenders' licenses are not in this account's list) lands here too, so
+        // the check also runs for the game we are currently launching, not only
+        // for apps a lua declares.
+        const AppId_t launchingApp = Hooks_Misc::ResolveAppId();
         if (AppId != 0 &&
             (!pDepotInfo || pDepotInfo->m_Size == 0) &&
-            LuaConfig::HasDepot(AppId, false))
+            (LuaConfig::HasDepot(AppId, false) || AppId == launchingApp))
         {
             LOG_MANIFEST_WARN("BuildDepotDependency: app {} returned 0 depots "
                 "(appinfo mid-refresh) — failing the call so Steam keeps its "
@@ -174,6 +198,8 @@ namespace {
         // Before the override pass, so what is cached is Steam's GID.
         RecordDepots(pDepotInfo);
         RecordDepots(pSharedDepotInfo);
+        RecordAppDepots(AppId, pDepotInfo);
+        RecordAppDepots(AppId, pSharedDepotInfo);
 
         const auto& overrides = LuaConfig::GetManifestOverrides();
 
@@ -229,7 +255,19 @@ namespace {
         // apps). A bounded blocking fetch: the original checks disk on the very
         // next line, so an archive hit converts into a first-attempt success; a
         // miss just returns and the original takes its normal request-code path.
-        if ( depotId && manifestGid && LuaConfig::HasDepot(depotId) ) {
+        //
+        // A Family-shared app (the bypass is on) is added with addappid(gameAppId)
+        // only, so `depotId` is the app and HasDepot(depotId) is false. For it,
+        // the app's own depot config — built by the original just above — names
+        // the depots, and the archive is consulted only for those.
+        bool preseed = depotId && manifestGid && LuaConfig::HasDepot(depotId);
+        if (!preseed && depotId && manifestGid && LuaConfig::GetFamilySharingBypass() &&
+            LuaConfig::HasDepot(appId, false)) {
+            std::lock_guard<std::mutex> lock(g_appDepotsMutex);
+            auto it = g_appDepots.find(appId);
+            preseed = it != g_appDepots.end() && it->second.count(depotId) > 0;
+        }
+        if (preseed) {
             LOG_MANIFEST_DEBUG("YldLoadDepotManifest: pre-seed app={} depot={} gid={} branch={}",
                                appId, depotId, manifestGid, branch ? branch : "");
             ManifestCache::EnsureCached(appId, depotId, manifestGid, kPreseedFetchTimeoutMs);

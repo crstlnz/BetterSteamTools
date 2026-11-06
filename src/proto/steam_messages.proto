@@ -136,6 +136,52 @@ message CFamilyGroupsClient_NotifyRunningApps_Notification {
 }
 
 // ============================================================
+// CMsgClientSharedLibraryLockStatus  (eMsg 9405)
+// Sent whenever shared-library lock ownership changes: each library entry lists
+// the SteamID currently holding the lock (0 = nobody).
+// ============================================================
+message CMsgClientSharedLibraryLockStatus {
+	message LockedLibrary {
+		optional uint32 owner_id = 1;
+		optional uint32 locked_by = 2;
+	}
+
+	repeated .CMsgClientSharedLibraryLockStatus.LockedLibrary locked_library = 1;
+	optional uint32 my_library_locked_by = 2;
+}
+
+// ============================================================
+// Service methods (eMsg 151 routed by target_job_name, answers in eMsg 147)
+// Field numbers follow the service'.proto definition. The service prefix is
+// kept in the C++ message name so it never collides with eMsg messages.
+// ============================================================
+message CFamilyGroups_NotifyRunningAppsRequest {
+	optional uint64 family_groupid = 1;
+	repeated .CFamilyGroups_NotifyRunningAppsResponse.RunningApp running_apps = 2;
+}
+
+// Reply to FamilyGroupsClient.NotifyRunningApps#1. RunningApp and
+// PlayingMember stay nested so the generated names remain unique; both are
+// reachable from the generated parent class.
+message CFamilyGroups_NotifyRunningAppsResponse {
+	message RunningApp {
+		optional uint32 appid = 1;
+		optional fixed64 owner_steamid = 2;
+		repeated int32 unused_reserved = 3 [deprecated = true];
+		optional bool is_running = 4;
+		optional bool is_locked = 5;
+	}
+
+	message PlayingMember {
+		optional fixed64 member_steamid = 1;
+		optional fixed64 owner_steamid = 2;
+		optional bool approved = 3;
+	}
+
+	repeated .CFamilyGroups_NotifyRunningAppsResponse.RunningApp running_apps = 1;
+}
+
+// ============================================================
 // CMsgClientSharedLibraryStopPlaying  (eMsg 9406)
 // ============================================================
 message CMsgClientSharedLibraryStopPlaying {
@@ -413,6 +459,57 @@ message CMsgClientPersonaState {
 message CMsgClientRichPresenceUpload {
 	optional bytes rich_presence_kv = 1;
 	repeated fixed64 steamid_broadcast = 2;
+}
+
+// ============================================================
+// CFamilyGroups_GetSharedLibraryApps  (eMsg 151/147 service method)
+//
+// Field numbers come from the descriptor embedded in steamclient64.dll
+// ("CFamilyGroups_GetSharedLibraryApps_Request"/"..._Response" + the nested
+// SharedApp message), not from a guess.
+// ============================================================
+enum ESharedLibraryExcludeReason {
+    k_ESharedLibrary_Included = 0;
+    k_ESharedLibrary_AppExcluded_ByPartner = 1;
+    k_ESharedLibrary_LicenseExcluded = 2;
+    k_ESharedLibrary_FreeGame = 3;
+    k_ESharedLibrary_LicensePrivate = 4;
+    k_ESharedLibrary_AppExcluded_WrongAppType = 6;
+    k_ESharedLibrary_AppExcluded_NonrefundableDLC = 7;
+    k_ESharedLibrary_AppExcluded_UnreleasedApp = 8;
+    k_ESharedLibrary_AppExcluded_ParentAppExcluded = 9;
+    k_ESharedLibrary_LicenseExcluded_ByPartner = 10;
+    k_ESharedLibrary_AppExcluded = 11;
+    k_ESharedLibrary_IncludedNotificationSent = 12;
+}
+
+message CFamilyGroups_GetSharedLibraryApps_Request {
+    optional fixed64 family_groupid = 1;
+    optional bool include_own = 2;
+    optional bool include_excluded = 3;
+    optional string language = 5;
+    optional uint32 max_apps = 6;
+    optional bool include_non_games = 7;
+    optional fixed64 steamid = 8;
+}
+
+message CFamilyGroups_GetSharedLibraryApps_Response {
+    message SharedApp {
+        optional uint32 appid = 1;
+        repeated fixed64 owner_steamids = 2;
+        optional string name = 6;
+        optional string sort_as = 7;
+        optional string capsule_filename = 8;
+        optional string img_icon_hash = 9;
+        optional ESharedLibraryExcludeReason exclude_reason = 10 [default = k_ESharedLibrary_Included];
+        optional uint32 rt_time_acquired = 11;
+        optional uint32 rt_last_played = 12;
+        optional uint32 rt_playtime = 13;
+        optional .EProtoAppType app_type = 14 [default = k_EAppTypeGame];
+        repeated uint32 content_descriptors = 15;
+    }
+    repeated CFamilyGroups_GetSharedLibraryApps_Response.SharedApp apps = 1;
+    optional fixed64 owner_steamid = 2;
 }
 
 // ============================================================

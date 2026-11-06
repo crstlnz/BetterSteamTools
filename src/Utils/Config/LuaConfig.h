@@ -44,6 +44,16 @@ namespace LuaConfig{
     std::vector<std::string> MergeWatchDirs(const std::vector<std::string>& configured,
                                             const std::string& defaultDir);
 
+    // Register the same app/depot entries a Lua script would add, without going
+    // through a file on disk. Used by the SteamTools-compatible generator, whose
+    // output (config/stplug-in/Steamtools.lua) already takes this path on the
+    // next directory reload; calling this makes it effective immediately.
+    // `decryptionKey` may be empty (same semantics as addappid(id, type)).
+    void AddDepotImmediate(AppId_t depotId, const std::string& decryptionKey);
+
+    // Same for a pinned manifest. size is forced to 0, matching setManifestid().
+    void SetManifestOverrideImmediate(uint64_t depotId, uint64_t gid);
+
     bool HasManifestCodeFunc();
     bool CallManifestFetchCode(uint64_t gid, uint64_t* outCode);
 
@@ -58,6 +68,9 @@ namespace LuaConfig{
     // Returns true if the appid was marked via forcedenuvo(), bypassing
     // ProtectionScan in DenuvoAuth (for games where the heuristic fails).
     bool IsForcedDenuvo(AppId_t appId);
+
+    // True unless [family_sharing] bypass = false is present in the TOML.
+    bool GetFamilySharingBypass();
 
     // On-demand eticket backend URL set via seteticketurl() in Lua config.
     // Empty string means the feature is disabled and EticketClient falls

@@ -89,6 +89,25 @@ enable_api = true
 # DLL loads on the next Steam launch. Set to false to disable the check entirely.
 enabled = true
 
+[family_sharing]
+# On by default — nothing needs to be added to this file. Set bypass = false
+# only if you do not want apps lent by another member of your Steam Family to be
+# published as locally owned (ownership flag, borrow expiry, license lock and the
+# 9405 / NotifyRunningApps shared-library arbitration).
+bypass = true
+
+[steamtools]
+# SteamTools-compatible import. Files dropped into the import folder are copied
+# into the Steam tree and registered, then config/stplug-in/Steamtools.lua is
+# regenerated from the live set:
+#   <import>\manifest\*.manifest  -> <steam>\config\depotcache\ (depot pinned)
+#   <import>\lua\*.lua            -> <steam>\config\stplug-in\  (rejects addsubid)
+#   <import>\bin\*                -> <steam>\config\StatsExport\
+#   <import>\*.txt / *.url        -> app-id list: "appid" or "appid,type,key"
+# The folder is watched, so a drop while Steam runs is imported immediately.
+#   import = "D:/steamtools-drop"   # default: <Steam>/opensteamtool/import
+enabled = true
+
 # Additional Lua config directories (optional).
 # Files are loaded after the default <Steam>/config/stplug-in folder.
 # The default folder is always loaded last so user files take priority.

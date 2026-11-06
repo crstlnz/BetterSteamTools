@@ -83,6 +83,13 @@ enum EAppOwnershipFlags
 	k_EAppOwnershipFlags_LegacyFreeSub		= 0x80000,	// App only owned through Steam's legacy free sub
 	k_EAppOwnershipFlags_InvalidOSType		= 0x100000,	// app not supported on current OS version, used to indicate a game is 32-bit on post-catalina. Currently it's own flag so the library will display a notice.
 	k_EAppOwnershipFlags_TimedTrial			= 0x200000,	// App is playable only for limited time
+	// Family Sharing bypass. Not a Steam flag: Steam never sets bit 22 on an
+	// ownership result. When the bypass presents a Family-shared app as a local
+	// license it raises this bit too, so the UI (which reads the raw ownership
+	// flags, not CheckAppOwnership's return) still knows the app is not really
+	// ours — "In use by <friend>", the lend list, and the pick-a-copy flow key
+	// off AppOwnership::bIsExcludedFromSharing, i.e. this bit.
+	k_EAppOwnershipFlags_FamilyBypass		= 0x400000,
 };
 
 enum class EGameIDType

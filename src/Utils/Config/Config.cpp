@@ -22,6 +22,8 @@ namespace {
         DonateSettings donate;
         std::vector<InjectDll> injectDlls;
         CloudSettings cloud;
+        FamilySharingSettings familySharing;
+        SteamToolsSettings steamTools;
     };
 
     std::mutex g_mutex;
@@ -60,6 +62,8 @@ namespace {
         injectDlls             = snapshot.injectDlls;
         cloudEnabled           = snapshot.cloud.enabled;
         cloudLibrary           = snapshot.cloud.library;
+        familySharing          = snapshot.familySharing;
+        steamTools             = snapshot.steamTools;
     }
 
     void ApplyManifestProvider(const std::string& provider) {
@@ -161,6 +165,19 @@ namespace {
                 if (auto val = (*update)["enabled"].value<bool>()) {
                     snapshot.updateEnabled = *val;
                 }
+            }
+
+            // [family_sharing]
+            if (auto family = tbl["family_sharing"].as_table()) {
+                if (auto val = (*family)["bypass"].value<bool>()) {
+                    snapshot.familySharing.bypass = *val;
+                }
+            }
+
+            // [steamtools]
+            if (auto st = tbl["steamtools"].as_table()) {
+                if (auto val = (*st)["enabled"].value<bool>())      snapshot.steamTools.enabled = *val;
+                if (auto val = (*st)["import"].value<std::string>()) snapshot.steamTools.importPath = *val;
             }
 
             // [donate]
@@ -297,6 +314,16 @@ namespace {
     bool GetUpdateEnabled() {
         std::lock_guard lock(g_mutex);
         return updateEnabled;
+    }
+
+    FamilySharingSettings GetFamilySharingSettings() {
+        std::lock_guard lock(g_mutex);
+        return familySharing;
+    }
+
+    SteamToolsSettings GetSteamToolsSettings() {
+        std::lock_guard lock(g_mutex);
+        return steamTools;
     }
 
     CloudSettings GetCloudSettings() {

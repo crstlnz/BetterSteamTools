@@ -53,6 +53,7 @@
 
 ### Family Sharing and Remote Play
 - Bypass Steam Family Sharing restrictions for games that have been added to the library with `addappid` in Lua. All accounts in the Steam Family that participate in sharing must use OpenSteamTool for this to work.
+- Family Sharing bypass is on by default (`[family_sharing] bypass = false` in `opensteamtool.toml` disables it; you do not need to add anything). Every app Steam reports as Family-shared (`bFamilyShared` / `bBorrowed`) is published to games and the Steam UI as a locally held permanent license — the borrow expiry / license-lock flags are cleared — and the shared-library arbitration is neutralised: `CMsgClientSharedLibraryLockStatus` (9405) locks held by other Family members are published as free, and `FamilyGroupsClient.NotifyRunningApps#1` play sessions are answered locally instead of being registered with the Family backend.
 
 ### Compatible with games protected by Denuvo and SteamStub
 - SteamStub-only games do not require configuring `AppTicket`. OpenSteamTool can reuse Steam's local ConfigStore ticket and forge the requested AppId through a SteamDRMP off-by-four ticket parsing vulnerability, without injecting into the game process.

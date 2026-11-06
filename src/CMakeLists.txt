@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
-project(OpenSteamTool VERSION 1.0.0 LANGUAGES C CXX)
+project(OpenSteamTool VERSION 2.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 set(OPENSTEAMTOOL_VERSION "${PROJECT_VERSION}" CACHE STRING "Version string embedded into OpenSteamTool.dll")
+set(OPENSTEAMTOOL_VERSION "${PROJECT_VERSION}")  # keep the embedded version in sync with project()
 
 # Allow CMAKE_MSVC_RUNTIME_LIBRARY to control runtime selection for all targets,
 # including dependencies pulled in via FetchContent.
@@ -122,6 +123,7 @@ add_library(OpenSteamTool SHARED
     Utils/SteamMetadata/RemoteToml.cpp
     Utils/SteamMetadata/StatsClient.cpp
     Utils/SteamMetadata/SteamDiagnostics.cpp
+    Utils/SteamMetadata/SteamToolsPipeline.cpp
     Utils/Tokeer/TokeerBridge.cpp
     Utils/Tokeer/TokeerUri.cpp
     Utils/Update/AppUpdater.cpp
@@ -151,6 +153,8 @@ add_library(OpenSteamTool SHARED
     Hook/PendingAPICalls.cpp
     Hook/Hooks_SteamUI.cpp
     Hook/Hooks_Package.cpp
+    Hook/Hooks_FamilySharing.cpp
+    Hook/Hooks_FamilySharing_Library.cpp
 
     # protobuf generated sources (full in Debug, lite in Release)
     "${PROTO_GEN_DIR}/steam_messages.pb.cc"

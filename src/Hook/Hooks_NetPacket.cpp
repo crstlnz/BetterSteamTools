@@ -8,6 +8,7 @@
 #include "Hooks_Manifest.h"
 #include "Hooks_SteamUI.h"
 #include "Hooks_Package.h"
+#include "Hooks_FamilySharing_Library.h"
 #include "HookMacros.h"
 #include "dllmain.h"
 #include "Utils/Tickets/AppTicket.h"
@@ -275,6 +276,8 @@ namespace {
     constexpr uint32 HASH_JOB_GetManifestRequestCode = Fnv1aHash("ContentServerDirectory.GetManifestRequestCode#1");
     constexpr uint32 HASH_JOB_GetGameAchievements = Fnv1aHash("Player.GetGameAchievements#1");
     constexpr uint32 HASH_JOB_GetUserAchievements = Fnv1aHash("Player.GetUserAchievements#1");
+    constexpr uint32 HASH_JOB_NotifyRunningApps = Fnv1aHash("FamilyGroupsClient.NotifyRunningApps#1");
+    constexpr uint32 HASH_JOB_GetSharedLibraryApps = Fnv1aHash("FamilyGroupsClient.GetSharedLibraryApps#1");
 
 } // anonymous namespace
 
@@ -2145,6 +2148,11 @@ namespace {
             Hooks_NetPacket_ManifestProbe::CaptureContext(nullptr, nullptr, pHdr, cbHdr);
             CMsgProtoBufHeader hdr;
             if (hdr.ParseFromArray(pHdr, cbHdr) && hdr.has_target_job_name()) {
+                if (Hooks_FamilySharing_Library::IsRunningAppsJob(hdr.target_job_name().c_str()) &&
+                    Hooks_FamilySharing_Library::PatchRunningAppsRequest(pBody, cbBody)) {
+                    g_SuppressSend = true;   // answered locally, never reaches Valve
+                    return;
+                }
                 g_NeedReplaceSend = SendServiceJob(hdr.target_job_name().c_str(), pBody, cbBody, pHdr, cbHdr);
             }
             return;
@@ -2162,6 +2170,18 @@ namespace {
         case k_EMsgClientRichPresenceUpload:           // 7501
             Hooks_NetPacket_RichPresence::TrackRPSend(pBody, cbBody);
             return;
+
+        case k_EMsgServiceMethodCallFromClientNonAuthed: { // 9804
+            // Family Sharing: play sessions for Library-shared apps are answered
+            // locally, so the Family backend never arbitrates them. (151 itself
+            // is handled above, where the manifest-probe context is captured.)
+            CMsgProtoBufHeader hdr;
+            if (!hdr.ParseFromArray(pHdr, cbHdr) || !hdr.has_target_job_name()) return;
+            if (!Hooks_FamilySharing_Library::IsRunningAppsJob(hdr.target_job_name().c_str())) return;
+            if (Hooks_FamilySharing_Library::PatchRunningAppsRequest(pBody, cbBody))
+                g_SuppressSend = true;
+            return;
+        }
 
         case k_EMsgClientGetUserStats:               // 818
             g_NeedReplaceSend = Hooks_NetPacket_UserStats::HandleSend_ClientGetUserStats(pBody, cbBody);
@@ -2210,6 +2230,24 @@ namespace {
             Hooks_NetPacket_UserStats::HandleRecv_GetUserAchievementsResponse(pHdr, cbHdr, pBody, cbBody);
             return;
 
+        case HASH_JOB_NotifyRunningApps:
+            // Family Sharing: a Family play session for an app added via Lua is
+            // republished as this account's own, so it is neither locked nor
+            // stopped by the sharing arbitration.
+            if (Hooks_FamilySharing_Library::PatchRunningAppsNotification(
+                    pBody, cbBody, g_NewBody, sizeof(g_NewBody), &g_cbNewBody))
+                g_NeedReplaceBody = true;
+            return;
+
+        case HASH_JOB_GetSharedLibraryApps:
+            // Family Sharing: the Family lend list is published with every app
+            // marked Included, so a copy whose lender is currently playing no
+            // longer comes back excluded (which removes Play in AppDetails).
+            if (Hooks_FamilySharing_Library::PatchSharedLibraryApps(
+                    pBody, cbBody, g_NewBody, sizeof(g_NewBody), &g_cbNewBody))
+                g_NeedReplaceBody = true;
+            return;
+
         // ---- add new 147 service methods here ----
         }
     }
@@ -2256,6 +2294,25 @@ namespace {
 
         case k_EMsgClientLicenseList:                  // 780
             Hooks_NetPacket_Licenses::HandleRecv(pBody, cbBody);
+            return;
+
+        case k_EMsgClientSharedLibraryLockStatus:      // 9405
+            // Family Sharing: a library locked by another Family member is
+            // republished as unlocked (bypass only).
+            if (Hooks_FamilySharing_Library::PatchSharedLibraryLockStatus(
+                    pBody, cbBody, g_NewBody, sizeof(g_NewBody), &g_cbNewBody))
+                g_NeedReplaceBody = true;
+            return;
+
+        case k_EMsgClientSharedLibraryStopPlaying:     // 9406
+            // The countdown behind "This shared game is already in use and will
+            // close in N minutes". 9405 is only the library lock; this is the
+            // message that actually tells a running session to stop, so with
+            // the bypass on it is answered with its neutral form (zero seconds,
+            // no apps) instead of forwarding a sender's countdown.
+            if (Hooks_FamilySharing_Library::NeutralizeStopPlaying(
+                    pBody, cbBody, g_NewBody, sizeof(g_NewBody), &g_cbNewBody))
+                g_NeedReplaceBody = true;
             return;
 
         default:

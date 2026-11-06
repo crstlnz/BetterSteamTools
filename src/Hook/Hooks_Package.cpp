@@ -1,5 +1,7 @@
 #include "Hooks_Package.h"
 #include "HookMacros.h"
+#include "Hooks_FamilySharing.h"
+#include "Hooks_FamilySharing_Library.h"
 #include "Hooks_SteamUI.h"
 #include "dllmain.h"
 #include "Utils/HookSupport/VehCommon.h"
@@ -199,6 +201,18 @@ namespace {
         bool result = oCheckAppOwnership(pObj, appId, pOwn);
         TryInitFakeLicenseOnce();
         Hooks_Package::TryDumpOwnedDepots();
+
+        // Family Sharing: the account id Steam returns alongside the ownership
+        // answer is this account's own — captured once and reused by the
+        // shared-library arbitration (9405 / NotifyRunningApps).
+        if (result && pOwn && Hooks_FamilySharing_Library::GetLocalSteamId() == 0 && pOwn->SteamId32)
+            Hooks_FamilySharing_Library::SetLocalSteamId(pOwn->SteamId32);
+
+        // Family Sharing: a shared app is presented as a local permanent
+        // license. Done before the Lua override so the override can still
+        // decide what to do with the app afterwards; the Lua path already
+        // implies ownership, so it reuses the normalized state.
+        Hooks_FamilySharing::NormalizeSharedOwnership(appId, pOwn);
 
         if (LuaConfig::HasDepot(appId,false)) {
             if (result && pOwn->ExistInPackageNums > 1) {

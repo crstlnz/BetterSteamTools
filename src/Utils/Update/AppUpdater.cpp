@@ -29,6 +29,38 @@ namespace {
 
     constexpr const char* kPointerPath = "opensteamtool/latest.toml";
 
+    // "1.2.3" or "1.2.3-rc1" -> the numeric triple. Unparseable input yields all
+    // zeros, so a non-numeric pointer can never replace a numeric build.
+    void ParseVersionTriple(std::string_view text, unsigned out[3])
+    {
+        out[0] = out[1] = out[2] = 0;
+        size_t pos = 0;
+        for (int part = 0; part < 3 && pos < text.size(); ++part) {
+            unsigned value = 0;
+            bool any = false;
+            while (pos < text.size() && std::isdigit(static_cast<unsigned char>(text[pos]))) {
+                value = value * 10 + static_cast<unsigned>(text[pos] - '0');
+                ++pos;
+                any = true;
+            }
+            out[part] = any ? value : 0;
+            if (pos < text.size() && text[pos] == '.') { ++pos; continue; }
+            break;
+        }
+    }
+
+    // True when `candidate` is a strictly lower numeric version than `current`.
+    bool IsVersionOlder(std::string_view candidate, std::string_view current)
+    {
+        unsigned c[3], r[3];
+        ParseVersionTriple(candidate, c);
+        ParseVersionTriple(current, r);
+        for (int i = 0; i < 3; ++i) {
+            if (c[i] != r[i]) return c[i] < r[i];
+        }
+        return false;
+    }
+
     bool EqualsIgnoreCase(std::string_view a, std::string_view b)
     {
         if (a.size() != b.size()) return false;
@@ -40,8 +72,7 @@ namespace {
         return true;
     }
 
-    std::string EscapeForPowerShellSingleQuoted(std::string s)
-    {
+    std::string EscapeForPowerShellSingleQuoted(std::string s)    {
         // Inside a PowerShell single-quoted string, ' is escaped by doubling it.
         for (size_t p = s.find('\''); p != std::string::npos; p = s.find('\'', p + 2))
             s.insert(p, 1, '\'');
@@ -82,8 +113,21 @@ CheckResult Check()
 
     // latest.toml is authoritative for "newest"; build tags are not semver, so any
     // difference from the running version means there is something new to stage.
+    //
+    // The delivery repo's pointer names a different build of the upstream tool.
+    // Replacing this DLL with it would silently disable everything this build adds
+    // (versioning aside, it is not guaranteed to carry the same hooks), so an
+    // updater that moves the DLL in a *different* direction is never applied — the
+    // new version is only accepted when the pointer is a strictly newer numeric
+    // version than this one.
     if (r.newVersion == r.oldVersion) {
         LOG_INFO("AppUpdater: up to date (version {})", r.oldVersion);
+        return r;
+    }
+
+    if (IsVersionOlder(r.newVersion, r.oldVersion)) {
+        LOG_INFO("AppUpdater: {} is older than this build ({}) - keeping the running DLL",
+                 r.newVersion, r.oldVersion);
         return r;
     }
 

@@ -31,6 +31,22 @@ namespace Config {
         std::string library;
     };
 
+    // [family_sharing] — decide whether the published AppOwnership struct in
+    // CheckAppOwnership may be rewritten for apps lent by another Family member.
+    // On by default: the bypass needs no entry in the TOML at all, and setting
+    // `bypass = false` is what turns it off.
+    struct FamilySharingSettings {
+        bool bypass = true;
+    };
+
+    // [steamtools] — SteamTools-compatible import pipeline. On by default with an
+    // empty path, which resolves to <steam>\opensteamtool\import; `enabled`
+    // turns the copy/generate steps off without deleting anything already there.
+    struct SteamToolsSettings {
+        bool        enabled = true;
+        std::string importPath;   // empty = <steam>\opensteamtool\import
+    };
+
     struct LoadResult {
         bool applied = false;
         bool luaPathsChanged = false;
@@ -46,6 +62,8 @@ namespace Config {
     CloudSettings GetCloudSettings();
     bool GetStatsEnableApi();
     bool GetUpdateEnabled();
+    FamilySharingSettings GetFamilySharingSettings();
+    SteamToolsSettings GetSteamToolsSettings();
 
     // [donate] — contribute manifest request codes for depots this account owns.
     struct DonateSettings {
@@ -95,5 +113,11 @@ namespace Config {
     // [cloud] - optional Steam Cloud save redirection via CloudRedirect.
     inline bool cloudEnabled = false;
     inline std::string cloudLibrary;
+
+    // [family_sharing] - default settings; nothing in the TOML is required.
+    inline FamilySharingSettings familySharing;
+
+    // [steamtools] - import pipeline defaults (see Config.h).
+    inline SteamToolsSettings steamTools;
 
 }

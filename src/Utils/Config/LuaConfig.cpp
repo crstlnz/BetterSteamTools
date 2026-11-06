@@ -2,6 +2,7 @@
 #include "OSTPlatform/include/Http.h"
 #include "OSTPlatform/include/Numbers.h"
 #include "Utils/Config/LuaConfig.h"
+#include "Utils/Config/Config.h"
 #include "Utils/SteamMetadata/StatsClient.h"
 #include "Utils/Tickets/AppTicket.h"
 
@@ -55,6 +56,10 @@ namespace LuaConfig{
     // Depot IDs removed by UnloadFile / added by ParseFile, consumed by NotifyLicenseChanged.
     static std::vector<AppId_t> g_pendingRemovals;
     static std::vector<AppId_t> g_pendingAdditions;
+    // Depot IDs registered through AddDepotImmediate() only. They are kept apart
+    // from g_fileDepots so a directory reload (ReloadDirectories -> UnloadFile for
+    // every tracked file) cannot drop entries no file backs.
+    static std::unordered_map<AppId_t, std::string> g_immediateDepots;
     constexpr uint64_t kDefaultStatSteamId = 76561198028121353ULL;
 
     // Case-insensitive function registry: lowercase name → C function
@@ -552,6 +557,10 @@ namespace LuaConfig{
         return EticketUrl;
     }
 
+    bool GetFamilySharingBypass() {
+        return Config::GetFamilySharingSettings().bypass;
+    }
+
     bool HasDepot(AppId_t DepotId,bool excludeOwned) {
         return DepotKeySet.count(DepotId) && (!excludeOwned || !IsOwned(DepotId));
     }
@@ -621,6 +630,37 @@ namespace LuaConfig{
 
     const std::unordered_map<uint64_t, ManifestOverride>& GetManifestOverrides() {
       return ManifestOverrides;
+    }
+
+    // ── SteamTools-compatible registration (no file on disk) ────────
+    //
+    // Same bookkeeping as lua_addappid()/lua_setManifestid(), minus the per-file
+    // attribution: callers get the entry applied now, and the generated
+    // Steamtools.lua reproduces it on the next directory reload. Keeping the
+    // entries in their own map means ReloadDirectories() (which unloads every
+    // tracked file) leaves them in place.
+    void AddDepotImmediate(AppId_t depotId, const std::string& decryptionKey) {
+        if (!Initialize() || !depotId) return;
+
+        const bool keyOk = decryptionKey.size() == 64;
+        auto it = g_immediateDepots.find(depotId);
+        if (it == g_immediateDepots.end()) {
+            g_immediateDepots.emplace(depotId, keyOk ? decryptionKey : std::string());
+            if (++g_depotRefCount[depotId] == 1)
+                g_pendingAdditions.push_back(depotId);
+        } else if (keyOk) {
+            it->second = decryptionKey;
+        }
+        if (keyOk) {
+            DepotKeySet[depotId] = decryptionKey;
+        } else {
+            DepotKeySet.try_emplace(depotId, std::string());
+        }
+    }
+
+    void SetManifestOverrideImmediate(uint64_t depotId, uint64_t gid) {
+        if (!Initialize() || !depotId || !gid) return;
+        SetActiveManifestOverride(depotId, ManifestOverride{ gid, 0 });
     }
 
     bool HasManifestCodeFunc() {

@@ -1,6 +1,7 @@
 #include "Hooks_SteamUI.h"
 #include "HookManager.h"
 #include "HookMacros.h"
+#include "Hooks_FamilySharing.h"
 #include "dllmain.h"
 #include "steam_messages.pb.h"
 #include "Utils/HookSupport/VehCommon.h"
@@ -24,6 +25,17 @@ namespace
     {
         if (pApp)
         {
+            // Family Sharing: the UI decides whether Play is available from this
+            // overview's ownership flags, not from CheckAppOwnership's return.
+            // An app the bypass presented as locally licensed must keep the
+            // "shared" marker there, or AppDetailsStore's Family branch treats it
+            // as unavailable and disables the button.
+            if (Hooks_FamilySharing::IsBypassedSharedApp(pApp->nAppID))
+            {
+                pApp->OwnershipFlags = static_cast<EAppOwnershipFlags>(
+                    static_cast<uint32>(pApp->OwnershipFlags) | k_EAppOwnershipFlags_FamilyBypass);
+            }
+
             // Track whether this app is actively downloading, so the manifest
             // path can tell a real user download from a background scheduled
             // update. UpdateRunning|UpdateStarted = a download is actually going.
