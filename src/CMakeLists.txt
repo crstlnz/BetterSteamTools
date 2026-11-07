@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(OpenSteamTool VERSION 2.0.3 LANGUAGES C CXX)
+project(OpenSteamTool VERSION 2.0.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,6 +27,9 @@ if(NOT WIN32)
 endif()
 
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+# Date stamp embedded in the build info (shown by the in-client version dialog).
+# Re-configured on every build, so it is the date the DLL was produced.
+string(TIMESTAMP OPENSTEAMTOOL_BUILD_DATE "%Y-%m-%d")
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenSteamToolBuildInfo.h.in"
     "${CMAKE_CURRENT_BINARY_DIR}/generated/OpenSteamToolBuildInfo.h"
@@ -143,6 +146,7 @@ add_library(OpenSteamTool SHARED
     Hook/HookManager.cpp
     Hook/Hooks_CallBack.cpp
     Hook/Hooks_Decryption.cpp
+    Hook/Hooks_Hotkey.cpp
     Hook/Hooks_IPC.cpp
     Hook/Hooks_IPC_ISteamUser.cpp
     Hook/Hooks_IPC_ISteamUtils.cpp

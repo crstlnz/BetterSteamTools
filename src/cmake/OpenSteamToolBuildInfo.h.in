@@ -1,3 +1,6 @@
 #pragma once
 
 #define OPENSTEAMTOOL_VERSION "@OPENSTEAMTOOL_VERSION@"
+
+// Date (YYYY-MM-DD) the build info was generated; shown in the version dialog.
+#define OPENSTEAMTOOL_BUILD_DATE "@OPENSTEAMTOOL_BUILD_DATE@"

@@ -9,12 +9,16 @@
 #include <thread>
 #include <utility>
 
+#include <windows.h>
+
 namespace SteamDiagnostics {
 
 namespace {
 
     struct Snapshot {
         std::string openSteamToolVersion = OPENSTEAMTOOL_VERSION;
+        std::string openSteamToolBuildDate = OPENSTEAMTOOL_BUILD_DATE;
+        std::string openSteamToolPath;
         std::string buildID = "(unavailable)";
         std::string steamclientPath;
         std::string steamclientSha256 = "(unavailable)";
@@ -62,12 +66,39 @@ namespace {
         return message;
     }
 
+    std::string BuildVersionReport()
+    {
+        const std::string& dll = g_snapshot.openSteamToolPath;
+        const std::string& client = g_snapshot.steamclientPath;
+        const std::string& ui = g_snapshot.steamUIPath;
+        std::string report;
+        report += "OpenSteamTool Crstlnz " + g_snapshot.openSteamToolVersion +
+                  "  (build " + g_snapshot.openSteamToolBuildDate + ")\n";
+        report += "DLL: " + (dll.empty() ? "(unknown)" : dll) + "\n";
+        report += "Steam Build ID: " + g_snapshot.buildID + "\n";
+        report += "steamclient64 SHA-256: " + g_snapshot.steamclientSha256 + "\n";
+        report += "steamui SHA-256: " + g_snapshot.steamUISha256 + "\n";
+        report += "\nCtrl+Shift+? opens this dialog.";
+        return report;
+    }
+
 } // namespace
 
 void Initialize(const std::string& steamclientPath,
                 const std::string& steamUIPath)
 {
     g_snapshot.buildID = DetectSteamBuildID();
+    {
+        // Our own module, for the DLL path shown in the version dialog.
+        HMODULE self = nullptr;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCSTR>(&Initialize), &self) && self) {
+            char path[MAX_PATH] = {};
+            if (GetModuleFileNameA(self, path, MAX_PATH))
+                g_snapshot.openSteamToolPath = path;
+        }
+    }
     g_snapshot.steamclientPath = steamclientPath;
     g_snapshot.steamclientSha256 = HashOrUnavailable(steamclientPath);
     g_snapshot.steamUIPath = steamUIPath;
@@ -100,6 +131,18 @@ void ShowWarning(std::string title, std::string message)
     std::thread([title = std::move(title),
                  message = AppendSnapshot(std::move(message))]() {
         OSTPlatform::Dialog::ShowWarning(title, message);
+    }).detach();
+}
+
+std::string VersionReport()
+{
+    return BuildVersionReport();
+}
+
+void ShowVersionInfo(std::string title)
+{
+    std::thread([title = std::move(title)]() {
+        OSTPlatform::Dialog::ShowInfo(title, BuildVersionReport());
     }).detach();
 }
 
