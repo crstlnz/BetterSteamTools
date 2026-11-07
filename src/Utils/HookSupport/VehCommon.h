@@ -45,6 +45,23 @@ namespace VehCommon {
         }
     }
 
+    // ── function-result access ───────────────────────────────────────────────
+    // Read the value a function returned, from a SINGLE_STEP hit on the
+    // instruction just past its first one (i.e. while the site's own
+    // single-step is running, after `onHit` called EnableSingleStep()).
+    //
+    // An integer/pointer argument slot already aliases the register file on
+    // x64: slots 1-4 are RCX/RDX/R8/R9 and slots 5-8 are the four home slots
+    // of the called procedure ([RSP+8]..[RSP+0x20] on entry). A `void*` return
+    // lives in RAX, and RAX is the 5th slot of that array -- which is also the
+    // shadow-space slot of x64 fastcall arg 5. So GetArg<void*>(ctx, 5) yields
+    // the return value while RSP is still at the return address. Returns 0 if
+    // the first instruction already popped the return address.
+    template<typename T>
+    inline T GetReturnRax(OSTPlatform::Trap::Context& ctx) {
+        return GetArg<T>(ctx, 5);
+    }
+
     // ── Int3Site: managed soft-breakpoint site ───────────────────────────────
     // One soft-breakpoint location handled by the shared VEH dispatcher.
     //
@@ -59,6 +76,11 @@ namespace VehCommon {
     // onHit fires after the byte is restored but before control returns to the
     // original code. It may read/mutate the CPU context (ctx) freely and inspect
     // the site metadata for logging or site-specific callback data.
+    //
+    // onExit (optional, persistent sites only) fires from the SINGLE_STEP
+    // exception raised by the TF that onHit requested -- i.e. after the
+    // original first instruction executed -- right before the int3 is re-armed.
+    // That is where a function's result is readable (GetReturnRax).
     struct Int3Site {
         uint8_t*    target;        // first byte of the hooked function
         uint8_t     originalByte;  // saved before arming
@@ -66,6 +88,7 @@ namespace VehCommon {
         void      (*onHit)(OSTPlatform::Trap::Context& ctx, const Int3Site& site);
         void*       callbackData;  // site-specific data consumed by onHit
         const char* label;         // logging tag
+        void      (*onExit)(OSTPlatform::Trap::Context& ctx, const Int3Site& site) = nullptr;
     };
 
     // Append a site to the registry and write 0xCC to its first byte.

@@ -64,6 +64,11 @@ bool OnSingleStep(OSTPlatform::Trap::Context& ctx) {
     for (auto& site : g_sites) {
         if (!site.persistent || !site.target) continue;
         if (!IsPostInt3Step(ctx.InstructionPointer(), site.target)) continue;
+        // onExit reads the state left behind by the instruction that just ran
+        // (e.g. the return value in RAX), so it fires before the int3 goes back
+        // in. Only a persistent site produces a single-step from us; a
+        // one-shot site that hits eEnableSingleStep() stays disarmed.
+        if (site.onExit) site.onExit(ctx, site);
         ArmInt3(site.target);
         return true;
     }

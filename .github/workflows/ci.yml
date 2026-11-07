@@ -101,21 +101,17 @@ jobs:
           name: OpenSteamTool-Debug-pr${{ github.run_number }}
           path: artifacts/Debug
 
-      # The deliverable is the three hijack DLLs that go into the Steam root, not
-      # the .lib/.exp/.pdb build products.
+      # Ship the whole build output directory, matching the upstream release layout
+      # (dwmapi.dll, xinput1_4.dll, OpenSteamTool.dll + .lib/.exp/lua_static.lib).
       - name: Package Release
         run: |
           7z a "OpenSteamTool-${{ steps.ver.outputs.tag }}-Release.zip" `
-            ".\artifacts\Release\dwmapi.dll" `
-            ".\artifacts\Release\xinput1_4.dll" `
-            ".\artifacts\Release\OpenSteamTool.dll" -mx5
+            ".\artifacts\Release\*" -mx5
 
       - name: Package Debug
         run: |
           7z a "OpenSteamTool-${{ steps.ver.outputs.tag }}-Debug.zip" `
-            ".\artifacts\Debug\dwmapi.dll" `
-            ".\artifacts\Debug\xinput1_4.dll" `
-            ".\artifacts\Debug\OpenSteamTool.dll" -mx5
+            ".\artifacts\Debug\*" -mx5
 
       # Publish the DLL + pointer to the orphan `updates` branch FIRST: this is what
       # the self-updater actually fetches. Layout:

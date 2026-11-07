@@ -132,6 +132,48 @@ namespace {
         return true;
     }
 
+    // ── Diagnosis: packets seen before the layout is known ─────────────
+    //
+    // Until TryResolveLayout latches, RecvPkt hands the packet straight back
+    // without inspecting it, so any message the server sends in that window is
+    // silently missed. The offset is unknown at this point, so this only walks
+    // the known candidates and logs the envelope when the header at that offset
+    // actually parses — no field is written and the packet is not modified.
+    void LogUnresolvedProbe(const CNetPacket* pPacket)
+    {
+        namespace Mem = OSTPlatform::Memory;
+        static int logged = 0;
+        if (logged >= 64) return;
+
+        const uint8* p = reinterpret_cast<const uint8*>(pPacket);
+        for (const auto& layout : NetPkt::kLayouts) {
+            if (!Mem::IsReadable(p + layout.dataOff, 0x10)) continue;
+
+            const uint8* ptr  = *reinterpret_cast<const uint8* const*>(p + layout.dataOff);
+            const uint32 size = *reinterpret_cast<const uint32*>(p + layout.dataOff + 8);
+            const uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
+            if (addr < kProbeMinPtr || addr >= kProbeMaxPtr) continue;
+            if (size < sizeof(MsgHdr) || size > kProbeMaxPacket) continue;
+            if (!Mem::IsReadable(ptr, sizeof(MsgHdr))) continue;
+
+            const uint32 raw    = *reinterpret_cast<const uint32*>(ptr);
+            const uint32 hdrLen = *reinterpret_cast<const uint32*>(ptr + 4);
+            if (!(raw & kMsgHdrProtoFlag)) continue;
+            if (hdrLen < 2 || hdrLen > kProbeMaxHdrLen) continue;
+            if (!Mem::IsReadable(ptr, sizeof(MsgHdr) + hdrLen)) continue;
+
+            CMsgProtoBufHeader hdr;
+            if (!hdr.ParseFromArray(ptr + sizeof(MsgHdr), static_cast<int>(hdrLen))) continue;
+
+            ++logged;
+            LOG_NETPACKET_INFO("Pre-layout packet: eMsg={} job={} ({}+{}h, {} bytes) at candidate +0x{:X}",
+                               raw & ~kMsgHdrProtoFlag,
+                               hdr.has_target_job_name() ? hdr.target_job_name() : "<none>",
+                               static_cast<uint32>(sizeof(MsgHdr)), hdrLen, size, layout.dataOff);
+            return;
+        }
+    }
+
     // Identify the layout from one packet. Latches only when exactly one
     // candidate matches and the same candidate also won the previous packet:
     // ambiguity is the one thing we must never latch on, and requiring two
@@ -2204,6 +2246,14 @@ namespace {
                         const uint8* pHdr, uint32 cbHdr)
     {
         LOG_NETPACKET_DEBUG("Recv target_job_name: {}", targetJobName);
+
+        // Family Sharing diagnosis: the exact job names Steam uses for the
+        // Family services were never observed, so anything under the Family*
+        // prefix that is not handled below is logged with its size. This is
+        // what tells us which spelling to match instead of guessing.
+        if (targetJobName && std::strncmp(targetJobName, "Family", 6) == 0)
+            LOG_NETPACKET_INFO("Family job seen: {} ({} body bytes)", targetJobName, cbBody);
+
         g_NeedReplaceBody = false;
         g_NeedReplaceHdr  = false;
 
@@ -2399,8 +2449,15 @@ namespace {
         // is re-delivered per sub-message. Injections and queued responses are
         // delayed, not dropped.
         if (!pPacket) return oRecvPkt(pThis, pPacket);
-        if (!NetPkt::IsResolved() && !TryResolveLayout(pPacket))
+        if (!NetPkt::IsResolved() && !TryResolveLayout(pPacket)) {
+            // Before the layout is known the packet is passed through untouched,
+            // so anything the server sends in this window is never inspected.
+            // Log just the envelope — eMsg plus the target job name when the
+            // header can be read at the unambiguous prefix — so a Family message
+            // arriving early is visible instead of silently missed.
+            LogUnresolvedProbe(pPacket);
             return oRecvPkt(pThis, pPacket);
+        }
 
         Hooks_NetPacket_RichPresence::TryInject(
             pThis, pPacket,

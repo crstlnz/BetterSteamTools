@@ -213,22 +213,26 @@ void* FindPattern(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* 
         return nullptr;
     }
 
+    void* addr = ResolveFromTable(module, funcName);
+    if (!addr) {
+        LOG_WARN("PatternLoader: no entry or no match for '{}'", funcName);
+        g_missingFunctions.emplace_back(funcName);
+    }
+    return addr;
+}
+
+void* ResolveFromTable(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcName)
+{
     uint32_t key = Fnv1aHash(funcName);
 
     auto mapIt = g_moduleMaps.find(module);
     if (mapIt == g_moduleMaps.end()) {
-        // Load() was never called for this module.
-        LOG_WARN("PatternLoader: FindPattern called for module that was never loaded "
-                 "('{}')", funcName);
-        g_missingFunctions.emplace_back(funcName);
         return nullptr;
     }
 
     auto& map = mapIt->second;
     auto entryIt = map.find(key);
     if (entryIt == map.end()) {
-        LOG_WARN("PatternLoader: no entry for '{}' (key=0x{:08X})", funcName, key);
-        g_missingFunctions.emplace_back(funcName);
         return nullptr;
     }
 
@@ -254,17 +258,12 @@ void* FindPattern(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* 
                           funcName, rva);
                 return addr;
             }
-            LOG_WARN("PatternLoader: sig scan miss for '{}' (pattern parsed OK, "
-                     "no match in module image)", funcName);
         } else {
-            LOG_WARN("PatternLoader: malformed sig for '{}': '{}'",
-                     funcName, entry.sig);
+            LOG_DEBUG("PatternLoader: malformed sig for '{}': '{}'",
+                      funcName, entry.sig);
         }
-    } else {
-        LOG_WARN("PatternLoader: entry for '{}' has neither rva nor sig", funcName);
     }
 
-    g_missingFunctions.emplace_back(funcName);
     return nullptr;
 }
 

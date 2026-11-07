@@ -63,9 +63,17 @@ namespace Hooks_FamilySharing_Library {
         return jobName && std::strcmp(jobName, "FamilyGroupsClient.NotifyRunningApps#1") == 0;
     }
 
+    // The service method is registered on the "FamilyGroups" service while the
+    // notifications come from "FamilyGroupsClient", and which prefix the
+    // client puts in target_job_name has not been observed yet: netpacket.log
+    // shows FamilyGroups.GetFamilyGroup#1 for the service and
+    // FamilyGroupsClient.NotifyRunningApps#1 for the notification. Accept both
+    // spellings so the lend list is patched whichever one Steam sends.
     bool IsSharedLibraryAppsJob(const char* jobName)
     {
-        return jobName && std::strcmp(jobName, "FamilyGroupsClient.GetSharedLibraryApps#1") == 0;
+        if (!jobName) return false;
+        return std::strcmp(jobName, "FamilyGroups.GetSharedLibraryApps#1") == 0 ||
+               std::strcmp(jobName, "FamilyGroupsClient.GetSharedLibraryApps#1") == 0;
     }
 
     // ── FamilyGroupsClient.GetSharedLibraryApps#1 ───────────────────────
@@ -159,19 +167,28 @@ namespace Hooks_FamilySharing_Library {
 
     // ── FamilyGroupsClient.NotifyRunningApps#1 ──────────────────────────
     //
-    // Incoming (eMsg 147, Response) — the Family broadcast a play session. Any
-    // entry referring to an app that is shared but not owned is either removed
-    // (it is not ours to arbitrate) or rewritten so it points at this account
-    // and is neither running nor locked.
+    // Incoming (eMsg 147, Response) — the Family broadcast a play session for
+    // one or more apps. This is what makes the client believe a copy is "in
+    // use" by another member, which is one half of the disabled-Play state.
+    //
+    // While the bypass is on, every entry that names a lender other than this
+    // account is neutralized: is_locked is cleared, is_running is cleared and
+    // the playing-member list is emptied, so no member — including this one —
+    // is recorded as playing the app.
+    //
+    // No Lua/depot filter here: the whole point is that an app lent by Family
+    // (which by definition is not in the Lua list) stops being arbitrated. The
+    // earlier version gated on LuaConfig::HasDepot and therefore never touched
+    // a real Family-shared app, which is why Play stayed disabled.
     bool PatchRunningAppsNotification(const uint8* pBody, uint32 cbBody,
                                       uint8* outBody, uint32 outCapacity,
                                       uint32* outSize)
     {
         if (!IsPatchEnabled()) return false;
 
-        CFamilyGroups_NotifyRunningAppsResponse msg;
+        CFamilyGroupsClient_NotifyRunningApps_Notification msg;
         if (!msg.ParseFromArray(pBody, cbBody)) {
-            LOG_PACKAGE_WARN("FamilySharing: failed to parse NotifyRunningApps reply "
+            LOG_PACKAGE_WARN("FamilySharing: failed to parse NotifyRunningApps notification "
                              "({} bytes) - layout not confirmed for this client", cbBody);
             return false;
         }
@@ -179,16 +196,29 @@ namespace Hooks_FamilySharing_Library {
         const uint64 localSteamId = GetLocalSteamId();
         bool changed = false;
 
-        for (int i = msg.running_apps_size() - 1; i >= 0; --i) {
+        for (int i = 0; i < msg.running_apps_size(); ++i) {
             auto* app = msg.mutable_running_apps(i);
             const AppId_t appId = app->appid();
-            if (!appId || !LuaConfig::HasDepot(appId, false)) continue;
+            if (!appId) continue;
 
-            LOG_PACKAGE_INFO("FamilySharing: running-app entry appid={} running={} locked={} -> neutralized",
-                             appId, app->is_running(), app->is_locked());
-            app->set_is_running(false);
+            // Only entries that are actually in use are rewritten; an app that
+            // nobody is playing is already in the state we want.
+            bool busy = app->is_locked()
+                     || app->playing_members_size() > 0;
+
+            // Everybody else's session on a copy we share is exactly what the
+            // bypass must hide. A session already attributed to this account is
+            // left alone so our own play state keeps working.
+            for (int m = 0; m < app->playing_members_size(); ++m) {
+                const uint64 member = app->playing_members(m).member_steamid();
+                if (!localSteamId || member != localSteamId) { busy = true; break; }
+            }
+            if (!busy) continue;
+
+            LOG_PACKAGE_INFO("FamilySharing: running-app appid={} locked={} members={} -> released",
+                             appId, app->is_locked(), app->playing_members_size());
             app->set_is_locked(false);
-            if (localSteamId) app->set_owner_steamid(localSteamId);
+            app->clear_playing_members();
             changed = true;
         }
 

@@ -29,12 +29,16 @@ namespace {
 
     constexpr const char* kPointerPath = "opensteamtool/latest.toml";
 
-    // "1.2.3" or "1.2.3-rc1" -> the numeric triple. Unparseable input yields all
-    // zeros, so a non-numeric pointer can never replace a numeric build.
+    // "1.2.3", "v1.2.3" or "1.2.3-rc1" -> the numeric triple. Release tags and the
+    // latest.toml pointer carry a "v" prefix, so it is skipped; without that,
+    // "v2.0.2" parsed as 0.0.0 and the updater treated every pointer as older
+    // than the running build. Unparseable input yields all zeros, so a non-numeric
+    // pointer can never replace a numeric build.
     void ParseVersionTriple(std::string_view text, unsigned out[3])
     {
         out[0] = out[1] = out[2] = 0;
         size_t pos = 0;
+        if (!text.empty() && (text[0] == 'v' || text[0] == 'V')) ++pos;
         for (int part = 0; part < 3 && pos < text.size(); ++part) {
             unsigned value = 0;
             bool any = false;
@@ -59,6 +63,19 @@ namespace {
             if (c[i] != r[i]) return c[i] < r[i];
         }
         return false;
+    }
+
+    // True when both strings name the same numeric version. Compared through
+    // ParseVersionTriple, not as text: latest.toml carries the release tag
+    // ("v2.0.2") while OPENSTEAMTOOL_VERSION does not ("2.0.2"), and a raw
+    // string compare made every start look like an update — which re-staged
+    // the upstream DLL over a locally built one on each launch.
+    bool IsSameVersion(std::string_view a, std::string_view b)
+    {
+        unsigned av[3], bv[3];
+        ParseVersionTriple(a, av);
+        ParseVersionTriple(b, bv);
+        return av[0] == bv[0] && av[1] == bv[1] && av[2] == bv[2];
     }
 
     bool EqualsIgnoreCase(std::string_view a, std::string_view b)
@@ -120,7 +137,7 @@ CheckResult Check()
     // updater that moves the DLL in a *different* direction is never applied — the
     // new version is only accepted when the pointer is a strictly newer numeric
     // version than this one.
-    if (r.newVersion == r.oldVersion) {
+    if (IsSameVersion(r.newVersion, r.oldVersion)) {
         LOG_INFO("AppUpdater: up to date (version {})", r.oldVersion);
         return r;
     }
